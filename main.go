@@ -9,7 +9,23 @@ import (
 	_ "github.com/heroku/x/hmetrics/onload"
 )
 
+
 func main() {
+	http.HandleFunc("/", handler)
+	http.HandleFunc("/ok", handler_ok)
+
+	port := os.Getenv("PORT")
+	log.Debug("port:%d", port)
+
+	err := http.ListenAndServe(":" + port, nil)
+	if err != nil {
+		panic(err)
+	}
+}
+
+
+
+func main_router() {
 	port := os.Getenv("PORT")
 
 	if port == "" {
