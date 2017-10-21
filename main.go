@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"compress/flate"
-	"compress/gzip"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
@@ -24,14 +22,6 @@ const (
 	Version = "1.0"
 )
 
-var Password = func() string {
-	if s := os.Getenv("PASSWORD"); s != "" {
-		return s
-	} else {
-		return "123456"
-	}
-}()
-
 var (
 	secureTransport *http.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -40,7 +30,7 @@ var (
 		},
 		TLSHandshakeTimeout: 30 * time.Second,
 		MaxIdleConnsPerHost: 4,
-		DisableCompression:  false,
+		DisableCompression:  true,
 	}
 
 	insecureTransport *http.Transport = &http.Transport{
@@ -50,14 +40,14 @@ var (
 		},
 		TLSHandshakeTimeout: 30 * time.Second,
 		MaxIdleConnsPerHost: 4,
-		DisableCompression:  false,
+		DisableCompression:  true,
 	}
 )
 
 
 func main() {
-	http.HandleFunc("/", handler)
-	http.HandleFunc("/ok", handler_ok)
+	http.HandleFunc("/2/", handler)
+	http.HandleFunc("/", handler_ok)
 
 	port := os.Getenv("PORT")
 	//log.Debug("port:%d", port)
@@ -70,8 +60,7 @@ func main() {
 
 func handler_ok(rw http.ResponseWriter, req *http.Request) {
 	rw.WriteHeader(http.StatusOK)
-        var w io.Writer = rw
-	io.WriteString(w, "OK")
+	io.WriteString(rw, "OK")
 }
 
 func ReadRequest(r io.Reader) (req *http.Request, err error) {
@@ -143,114 +132,43 @@ func httpError(rw http.ResponseWriter, err string, code int) {
 func handler(rw http.ResponseWriter, req *http.Request) {
 	var err error
 
-	logger := log.New(os.Stdout, "index.go: ", 0)
-
 	var hdrLen uint16
 	if err := binary.Read(req.Body, binary.BigEndian, &hdrLen); err != nil {
-		parts := strings.Split(req.Host, ".")
-		switch len(parts) {
-		case 1, 2:
-			httpError(rw, "fetchserver:"+err.Error(), http.StatusBadRequest)
-		default:
-			u := *req.URL
-			if u.Scheme == "" {
-				u.Scheme = "http"
-			}
-			u.Host = fmt.Sprintf("phuslu-%d.%s", time.Now().Nanosecond(), strings.Join(parts[1:], "."))
-			if resp, err := http.Get(u.String()); err == nil {
-				defer resp.Body.Close()
-				for key, values := range resp.Header {
-					for _, value := range values {
-						rw.Header().Add(key, value)
-					}
-				}
-				rw.WriteHeader(resp.StatusCode)
-				io.Copy(rw, resp.Body)
-			} else {
-				u.Host = "www." + strings.Join(parts[1:], ".")
-				http.Redirect(rw, req, u.String(), 301)
-			}
-		}
+		httpError(rw, "fetch header len:"+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req1, err := ReadRequest(io.LimitReader(req.Body, int64(hdrLen)))
+	if err != nil {
+		httpError(rw, "fetch header:"+err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	req1, err := ReadRequest(flate.NewReader(&io.LimitedReader{R: req.Body, N: int64(hdrLen)}))
-	req1.Body = req.Body
-
-	if ce := req1.Header.Get("Content-Encoding"); ce != "" {
-		var r io.Reader
-		switch ce {
-		case "deflate":
-			r = flate.NewReader(req1.Body)
-		case "gzip":
-			if r, err = gzip.NewReader(req1.Body); err != nil {
-				httpError(rw, "fetchserver:"+err.Error(), http.StatusBadRequest)
-				return
-			}
-		default:
-			httpError(rw, "fetchserver:"+fmt.Sprintf("Unsupported Content-Encoding: %#v", ce), http.StatusBadRequest)
-			return
-		}
-		data, err := ioutil.ReadAll(r)
-		if err != nil {
-			req1.Body.Close()
-			httpError(rw, "fetchserver:"+err.Error(), http.StatusBadRequest)
-			return
-		}
-		req1.Body.Close()
-		req1.Body = ioutil.NopCloser(bytes.NewReader(data))
-		req1.ContentLength = int64(len(data))
-		req1.Header.Set("Content-Length", strconv.FormatInt(req1.ContentLength, 10))
-		req1.Header.Del("Content-Encoding")
+	var bodyLen uint32
+	if err := binary.Read(req.Body, binary.BigEndian, &bodyLen); err != nil {
+		httpError(rw, "fetch body len:"+err.Error(), http.StatusBadRequest)
+		return
+	}
+	r := io.LimitReader(req.Body, int64(bodyLen))
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		httpError(rw, "fetch body:"+err.Error(), http.StatusBadRequest)
+		return
 	}
 
-	logger.Printf("%s \"%s %s %s\" - -", req.RemoteAddr, req1.Method, req1.URL.String(), req1.Proto)
+	req1.Body = ioutil.NopCloser(bytes.NewReader(data))
+	req1.ContentLength = int64(len(data))
+	req1.Header.Set("Content-Length", strconv.FormatInt(req1.ContentLength, 10))
 
-	var paramsPreifx string = http.CanonicalHeaderKey("X-UrlFetch-")
-	params := map[string]string{}
-	for key, values := range req1.Header {
-		if strings.HasPrefix(key, paramsPreifx) {
-			params[strings.ToLower(key[len(paramsPreifx):])] = values[0]
-		}
-	}
+	log.Printf("%s \"%s %s %s\" - -", req.RemoteAddr, req1.Method, req1.URL.String(), req1.Proto)
 
-	for key := range params {
-		req1.Header.Del(paramsPreifx + key)
-	}
-
-	if Password != "" {
-		if password, ok := params["password"]; !ok || password != Password {
-			httpError(rw, fmt.Sprintf("fetchserver: wrong password %#v", password), http.StatusForbidden)
-			return
-		}
-	}
-
-	transport := insecureTransport
-	if v, ok := params["sslverify"]; ok && v == "1" {
-		transport = secureTransport
-	}
 
 	var resp *http.Response
-	for i := 0; i < 2; i++ {
-		resp, err = transport.RoundTrip(req1)
-		if err == nil {
-			break
-		}
-
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-
-		if err1, ok := err.(interface {
-			Temporary() bool
-		}); ok && err1.Temporary() {
-			time.Sleep(1 * time.Second)
-			continue
-		}
-
-		httpError(rw, "fetchserver:"+err.Error(), http.StatusBadGateway)
+	resp, err = insecureTransport.RoundTrip(req1)
+	if err != nil {
+		httpError(rw, "fetch remote:"+err.Error(), http.StatusBadGateway)
 		return
 	}
+
 	defer resp.Body.Close()
 
 	// rewise resp.Header
@@ -259,49 +177,11 @@ func handler(rw http.ResponseWriter, req *http.Request) {
 		resp.Header.Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 
-	needCrypto := false
-	if v, ok := params["https"]; !ok || v == "0" {
-		switch strings.Split(resp.Header.Get("Content-Type"), "/")[0] {
-		case "image", "audio", "video":
-			break
-		default:
-			needCrypto = true
-		}
-	}
-
 	var w io.Writer = rw
-	if needCrypto {
-		rw.Header().Set("Content-Type", "image/gif")
-		w = newXorWriter(rw, []byte(Password))
-	} else {
-		rw.Header().Set("Content-Type", "image/x-png")
-	}
-
 	rw.WriteHeader(http.StatusOK)
 
 	fmt.Fprintf(w, "%s %s\r\n", resp.Proto, resp.Status)
 	resp.Header.Write(w)
 	io.WriteString(w, "\r\n")
 	io.Copy(w, resp.Body)
-}
-
-type xorWriter struct {
-	w   io.Writer
-	key []byte
-}
-
-func newXorWriter(w io.Writer, key []byte) io.Writer {
-	x := new(xorWriter)
-	x.w = w
-	x.key = key
-	return x
-}
-
-func (x *xorWriter) Write(p []byte) (n int, err error) {
-	c := x.key[0]
-	for i := 0; i < len(p); i++ {
-		p[i] ^= c
-	}
-
-	return x.w.Write(p)
 }
