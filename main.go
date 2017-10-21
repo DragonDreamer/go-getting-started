@@ -55,7 +55,7 @@ var (
 
 func main() {
 	http.HandleFunc("/", handler)
-	http.HandleFunc("/ok", handler_ok)
+	// http.HandleFunc("/ok", handler_ok)
 
 	parts := []string{"", "8080"}
 
