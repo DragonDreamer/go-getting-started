@@ -57,6 +57,10 @@ func main() {
 	http.HandleFunc("/", handler)
 	// http.HandleFunc("/ok", handler_ok)
 
+
+	port := os.Getenv("PORT")
+	fmt.Fprintf(os.Stdout, "port: %d\n", port)
+
 	parts := []string{"", "8080"}
 
 	for i, keys := range [][]string{{"VCAP_APP_HOST", "HOST"}, {"VCAP_APP_PORT", "PORT"}} {
