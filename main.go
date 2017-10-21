@@ -4,6 +4,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"io"
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/heroku/x/hmetrics/onload"
@@ -15,7 +16,7 @@ func main() {
 	http.HandleFunc("/ok", handler_ok)
 
 	port := os.Getenv("PORT")
-	log.Debug("port:%d", port)
+	//log.Debug("port:%d", port)
 
 	err := http.ListenAndServe(":" + port, nil)
 	if err != nil {
