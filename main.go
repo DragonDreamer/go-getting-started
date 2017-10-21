@@ -11,7 +11,7 @@ import (
 
 
 func main() {
-	http.HandleFunc("/", handler)
+	//http.HandleFunc("/", handler)
 	http.HandleFunc("/ok", handler_ok)
 
 	port := os.Getenv("PORT")
@@ -56,4 +56,10 @@ func get_root(c *gin.Context) {
 func get_ok(c *gin.Context) {
 	c.String(http.StatusOK, "Hello OK")
 	
+}
+
+func handler_ok(rw http.ResponseWriter, req *http.Request) {
+	rw.WriteHeader(http.StatusOK)
+        var w io.Writer = rw
+	io.WriteString(w, "OK")
 }
